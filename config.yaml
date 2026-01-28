@@ -1,0 +1,85 @@
+# ==================== 输入输出 ====================
+input:
+  audio_path: "./music.mp3"          # 输入音频路径
+  
+output:
+  video_path: "./output_video.mp4"   # 输出视频路径
+  save_frames: false                  # 是否保存单独帧
+  frames_dir: "./frames"              # 帧保存目录
+
+# ==================== 音频范围 ====================
+range:
+  enabled: true                       # 是否启用范围选择
+  start_time: 0.0                     # 开始时间 (秒)
+  end_time: 30                        # 结束时间 (秒), -1 表示到音频结尾
+
+# ==================== 视频参数 ====================
+video:
+  width: 1920                         # 视频宽度
+  height: 1080                        # 视频高度
+  fps: 30                             # 帧率
+  codec: "mp4v"                       # 编码器 (mp4v, avc1, XVID)
+  
+# ==================== 音频处理 ====================
+audio:
+  sample_rate: 32000                  # 采样率 (PaSST 要求 32kHz)
+  window_duration: 10.0               # 分析窗口时长 (秒)
+  hop_duration: 0.033                 # 窗口滑动步长 (秒), 约等于 1/fps
+
+# ==================== 频谱图参数 ====================
+spectrogram:
+  n_mels: 128                         # 梅尔频带数
+  n_fft: 2048                         # FFT 窗口大小
+  hop_length: 320                     # STFT 步长
+  fmin: 0                             # 最低频率 (Hz)
+  fmax: 16000                         # 最高频率 (Hz)
+  colormap: "magma"                   # 频谱图配色 (magma, viridis, plasma)
+
+# ==================== 注意力可视化 ====================
+attention:
+  layer_index: -1                     # 使用的层 (-1 表示最后一层)
+  head_reduction: "mean"              # 多头聚合方式 (mean, max, specific)
+  specific_head: 0                    # 当 head_reduction 为 specific 时使用
+  colormap: "hot"                     # 注意力图配色 (hot, jet, inferno)
+  
+# ==================== 叠加效果 ====================
+overlay:
+  mode: "blend"                       # 叠加模式 (blend, multiply, screen)
+  attention_weight: 0.6               # 注意力图权重 (0-1)
+  spectrogram_weight: 0.4             # 频谱图权重 (0-1)
+  final_colormap: "inferno"           # 最终叠加配色
+
+# ==================== 布局 ====================
+layout:
+  mode: "single"                      # 布局模式 (single, split)
+  # split 模式下的配置
+  split:
+    show_spectrogram: true            # 显示原始频谱
+    show_attention: true              # 显示注意力图
+    show_overlay: true                # 显示叠加效果
+  # 边距
+  margin:
+    top: 60
+    bottom: 100
+    left: 100
+    right: 60
+
+# ==================== 标注 ====================
+annotation:
+  show_title: true                    # 显示标题
+  title: "PaSST Attention Visualization"
+  show_timestamp: true                # 显示时间戳
+  show_colorbar: true                 # 显示颜色条
+  show_labels: true                   # 显示坐标轴标签
+  font_size: 24                       # 字体大小
+  font_color: "white"                 # 字体颜色
+
+# ==================== 模型参数 ====================
+model:
+  pretrained: true                    # 使用预训练权重
+  device: "cuda"                      # 设备 (cuda, cpu)
+
+# ==================== 性能优化 ====================
+performance:
+  use_amp: false                      # 使用混合精度
+  cache_attention: true               # 缓存注意力计算结果
