@@ -6,12 +6,13 @@ output:
   video_path: "./output_video.mp4"   # 输出视频路径
   save_frames: false                  # 是否保存单独帧
   frames_dir: "./frames"              # 帧保存目录
+  add_audio: true                     # 是否添加背景音乐（需要 ffmpeg）
 
 # ==================== 音频范围 ====================
 range:
   enabled: true                       # 是否启用范围选择
   start_time: 0.0                     # 开始时间 (秒)
-  end_time: 30                        # 结束时间 (秒), -1 表示到音频结尾
+  end_time: 5                        # 结束时间 (秒), -1 表示到音频结尾
 
 # ==================== 视频参数 ====================
 video:
@@ -56,7 +57,7 @@ layout:
   split:
     show_spectrogram: true            # 显示原始频谱
     show_attention: true              # 显示注意力图
-    show_overlay: true                # 显示叠加效果
+    show_overlay: false               # 显示叠加效果
   # 边距
   margin:
     top: 60
@@ -71,6 +72,7 @@ annotation:
   show_timestamp: true                # 显示时间戳
   show_colorbar: true                 # 显示颜色条
   show_labels: true                   # 显示坐标轴标签
+  show_playhead: true                 # 显示播放头（居中的时间指示线）
   font_size: 24                       # 字体大小
   font_color: "white"                 # 字体颜色
 

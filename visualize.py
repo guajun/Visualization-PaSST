@@ -4,6 +4,11 @@ PaSST 注意力可视化视频生成器
 """
 
 import os
+import warnings
+# 抑制 hear21passt 库的警告
+warnings.filterwarnings("ignore", message=".*autocast.*deprecated.*")
+warnings.filterwarnings("ignore", message=".*Input image size.*doesn't match model.*")
+
 import yaml
 import torch
 import numpy as np
@@ -12,6 +17,8 @@ import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
 import librosa
 import cv2
+import subprocess
+import tempfile
 from tqdm import tqdm
 from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass
@@ -89,6 +96,12 @@ class Config:
     use_amp: bool
     cache_attention: bool
     
+    # 音频叠加
+    add_audio: bool
+    
+    # 播放头（时间指示线）
+    show_playhead: bool
+    
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'Config':
         """从 YAML 文件加载配置"""
@@ -163,6 +176,12 @@ class Config:
             # 性能
             use_amp=cfg['performance']['use_amp'],
             cache_attention=cfg['performance']['cache_attention'],
+            
+            # 音频叠加
+            add_audio=cfg['output'].get('add_audio', True),
+            
+            # 播放头
+            show_playhead=cfg['annotation'].get('show_playhead', True),
         )
 
 
@@ -290,7 +309,8 @@ class FrameRenderer:
         spectrogram: np.ndarray,
         attention_map: np.ndarray,
         current_time: float,
-        total_duration: float
+        total_duration: float,
+        window_duration: float = 10.0
     ) -> np.ndarray:
         """渲染单一叠加模式的帧"""
         fig = plt.figure(figsize=(self.fig_width, self.fig_height), dpi=self.dpi)
@@ -335,8 +355,28 @@ class FrameRenderer:
             vmin=0, vmax=1
         )
         
+        # 添加播放头指示线（居中的垂直线）
+        if self.config.show_playhead:
+            center_x = spectrogram.shape[1] / 2
+            ax.axvline(x=center_x, color='white', linewidth=2, alpha=0.8)
+            # 添加三角形标记
+            ax.plot(center_x, spectrogram.shape[0] - 1, 'v', color='white', markersize=10, alpha=0.8)
+            ax.plot(center_x, 0, '^', color='white', markersize=10, alpha=0.8)
+        
+        # 计算时间轴标签（以当前时间为中心）
+        n_ticks = 5
+        time_width = overlay.shape[1]
+        tick_positions = np.linspace(0, time_width - 1, n_ticks)
+        # 当前时间在中心，计算窗口的时间范围
+        window_start_time = current_time - window_duration / 2
+        window_end_time = current_time + window_duration / 2
+        tick_times = np.linspace(window_start_time, window_end_time, n_ticks)
+        tick_labels = [f"{t:.1f}s" for t in tick_times]
+        
         # 设置标签
         if self.config.show_labels:
+            ax.set_xticks(tick_positions)
+            ax.set_xticklabels(tick_labels)
             ax.set_xlabel('Time', color=self.config.font_color, fontsize=self.config.font_size)
             ax.set_ylabel('Frequency', color=self.config.font_color, fontsize=self.config.font_size)
             ax.tick_params(colors=self.config.font_color, labelsize=self.config.font_size - 4)
@@ -469,11 +509,12 @@ class FrameRenderer:
         spectrogram: np.ndarray,
         attention_map: np.ndarray,
         current_time: float,
-        total_duration: float
+        total_duration: float,
+        window_duration: float = 10.0
     ) -> np.ndarray:
         """根据配置渲染帧"""
         if self.config.layout_mode == "single":
-            return self.render_single_mode(spectrogram, attention_map, current_time, total_duration)
+            return self.render_single_mode(spectrogram, attention_map, current_time, total_duration, window_duration)
         else:
             return self.render_split_mode(spectrogram, attention_map, current_time, total_duration)
 
@@ -542,23 +583,25 @@ class VideoGenerator:
         
         # 计算帧数和时间步
         window_samples = int(self.config.window_duration * self.config.sample_rate)
+        half_window_samples = window_samples // 2
         hop_samples = int(self.config.hop_duration * self.config.sample_rate)
         
-        # 确保音频足够长
-        if len(audio) < window_samples:
-            # 填充音频
-            audio = np.pad(audio, (0, window_samples - len(audio)), mode='constant')
+        # 在音频前后添加填充，使得当前时间可以居中显示
+        audio_padded = np.pad(audio, (half_window_samples, half_window_samples), mode='constant')
         
-        # 计算总帧数
-        num_frames = (len(audio) - window_samples) // hop_samples + 1
+        # 计算总帧数 (基于原始音频长度)
+        num_frames = len(audio) // hop_samples
         
         # 创建视频写入器
         if self.config.save_frames:
             os.makedirs(self.config.frames_dir, exist_ok=True)
         
+        # 使用临时文件保存无音频视频
+        temp_video_path = self.config.video_path + ".temp.mp4" if self.config.add_audio else self.config.video_path
+        
         fourcc = cv2.VideoWriter_fourcc(*self.config.codec)
         out = cv2.VideoWriter(
-            self.config.video_path,
+            temp_video_path,
             fourcc,
             self.config.fps,
             (self.config.video_width, self.config.video_height)
@@ -569,18 +612,20 @@ class VideoGenerator:
         
         # 生成每一帧
         for frame_idx in tqdm(range(num_frames), desc="Rendering"):
-            start_sample = frame_idx * hop_samples
+            # 当前时间点（相对于原始音频）
+            current_sample = frame_idx * hop_samples
+            
+            # 在填充后的音频中，窗口以当前时间为中心
+            # 窗口起始 = 当前采样点（在原始音频中）+ 0（因为我们加了 half_window 填充）
+            # 这样窗口中心就是 current_sample + half_window = 原始音频的 current_sample
+            start_sample = current_sample  # 在 padded audio 中的起始位置
             end_sample = start_sample + window_samples
             
-            # 确保不超出范围
-            if end_sample > len(audio):
-                break
-            
             # 提取音频片段
-            audio_chunk = audio[start_sample:end_sample]
+            audio_chunk = audio_padded[start_sample:end_sample]
             
-            # 计算当前时间
-            current_time = start_sample / self.config.sample_rate
+            # 计算当前时间（用于显示）
+            current_time = current_sample / self.config.sample_rate
             if self.config.range_enabled:
                 current_time += self.config.start_time
             
@@ -614,7 +659,8 @@ class VideoGenerator:
                 spectrogram,
                 attention_map,
                 current_time,
-                total_duration + (self.config.start_time if self.config.range_enabled else 0)
+                total_duration + (self.config.start_time if self.config.range_enabled else 0),
+                self.config.window_duration
             )
             
             # 转换 RGB 到 BGR (OpenCV 格式)
@@ -632,7 +678,55 @@ class VideoGenerator:
         out.release()
         self.attention_extractor.remove_hooks()
         
+        # 添加背景音乐
+        if self.config.add_audio:
+            self._add_audio_to_video(temp_video_path, self.config.video_path, total_duration)
+            # 删除临时文件
+            if os.path.exists(temp_video_path):
+                os.remove(temp_video_path)
+        
         print(f"Video saved to: {self.config.video_path}")
+    
+    def _add_audio_to_video(self, video_path: str, output_path: str, duration: float):
+        """使用 ffmpeg 将音频添加到视频"""
+        print("Adding audio to video...")
+        
+        # 构建 ffmpeg 命令
+        audio_start = self.config.start_time if self.config.range_enabled else 0
+        
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-ss", str(audio_start),
+            "-t", str(duration),
+            "-i", self.config.audio_path,
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-shortest",
+            output_path
+        ]
+        
+        try:
+            # 使用 bytes 模式避免 Windows 编码问题
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                check=True
+            )
+            print("Audio added successfully!")
+        except subprocess.CalledProcessError as e:
+            stderr_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else "Unknown error"
+            print(f"Warning: Failed to add audio. ffmpeg error: {stderr_msg}")
+            print("Saving video without audio...")
+            # 如果 ffmpeg 失败，直接重命名临时文件
+            import shutil
+            shutil.move(video_path, output_path)
+        except FileNotFoundError:
+            print("Warning: ffmpeg not found. Saving video without audio...")
+            print("Please install ffmpeg to enable audio support.")
+            import shutil
+            shutil.move(video_path, output_path)
 
 
 def main():
